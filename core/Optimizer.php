@@ -14,7 +14,7 @@ class Optimizer {
 	}
 
 	public static function get_all_files() {
-        $directory_stack = array(BASE_PATH);
+        $directory_stack = array(BASE_PATH.DIRECTORY_SEPARATOR.'framework');
         $ignored_files = array();
         $file_list = array();
         while ($directory_stack) {
@@ -30,6 +30,7 @@ class Optimizer {
                     $filename[0] === '.' ||
                     //$filename[0] === '_' ||
                     $filename === 'index.php' ||
+                    $filename === 'main.php' ||
                     isset($ignored_files[$pathname])
                 )) 
                 {
@@ -46,35 +47,70 @@ class Optimizer {
 	}
 
 	public function optimize() {
+		//return;
 		foreach (static::get_all_files() as $filename) {
-			$filename = 'C:\wamp\www\silverstripe\framework\model\ArrayList.php';
 			$fileData = file_get_contents($filename);
 			$tokens = token_get_all($fileData);
-			//var_dump(token_name(308)); exit;
-			//var_dump($tokens); exit;
-			$i = 0;
-			while (isset($tokens[$i])) {
-				$token = $tokens[$i++];
+			$i = -1;
+			while (isset($tokens[++$i])) {
+				$topI = $i;
+				$topToken = $token = $tokens[$topI];
 				$tokenId = ($token === (array)$token) ? $token[0] : $token;
-				if ($tokenId === T_STRING && $token[1] === 'is_array') {
-					$isArrayIndex = $i-1;
-					$isArrayParam = '';
-					$openBrackets = 0;
-					while (isset($tokens[$i]) && ($openBrackets == 0 && $tokenId !== ')')) {
-						$token = $tokens[$i];
-						unset($tokens[$i]);
+				if ($tokenId === T_STRING && ($topToken[1] === 'is_array' || $topToken[1] === 'is_string')) {
+					// Skip unnecessary characters before the '(' token such as whitespace
+					$token = $tokens[++$i];
+					$tokenId = ($token === (array)$token) ? $token[0] : $token;
+					if ($tokenId === T_WHITESPACE) {
+						// If this token is whitespace, skip to the next, assumed to be (
+						$token = $tokens[++$i];
 						$tokenId = ($token === (array)$token) ? $token[0] : $token;
-						if ($tokenId === T_VARIABLE || $tokenId === T_OBJECT_OPERATOR || $tokenId === T_STRING
-							|| ($isArrayParam !== '' && $tokenId === '(') || $openBrackets > 0) {
-							$isArrayParam .= ($token === (array)$token) ? $token[1] : $token;
-							if ($isArrayParam !== '') {
-								$openBrackets += (int)($tokenId === '(');
-								$openBrackets -= (int)($tokenId === ')');
-							}
-						}
-						$i += 1;
 					}
-					$tokens[$isArrayIndex] = array(0, '('.$isArrayParam.' === (array)'.$isArrayParam.')', 0);
+
+					if ($tokenId !== '(') {
+						trigger_error('Unexpected token.');
+						exit;
+					}
+
+					// Store all code until hits the end ')', supports brackets inside function
+					// call for the 'func_get_arg(1)' cases.
+					$openBrackets = 0;
+					$funcParamCode = '';
+					while(true) {
+						$token = $tokens[++$i];
+						$tokenId = ($token === (array)$token) ? $token[0] : $token;
+						if ($openBrackets == 0 && $tokenId === ')') {
+							++$i;
+							break;
+						}
+						$openBrackets += (int)($tokenId === '(');
+						$openBrackets -= (int)($tokenId === ')');
+						if (isset($token[1])) {
+							$funcParamCode .= $token[1];
+						} else {
+							$funcParamCode .= $token;
+						}
+					};
+					
+					// Keep top token to override and remove the rest
+					for ($j = $topI+1; $j < $i; ++$j) {
+						unset($tokens[$j]);
+					}
+
+					switch ($topToken[1])
+					{
+						case 'is_array':
+							$tokens[$topI] = array(0, '('.$funcParamCode.' === (array)'.$funcParamCode.')', 0);
+						break;
+
+						case 'is_string':
+							$tokens[$topI] = array(0, '('.$funcParamCode.' === (string)'.$funcParamCode.')', 0);
+						break;
+
+						default:
+							trigger_error('Unexpected switch case '.$topToken[1]);
+							exit;
+						break;
+					}
 				}
 			}
 			$code = self::tokens_to_code($tokens);
@@ -82,8 +118,9 @@ class Optimizer {
 				file_put_contents($filename, $code);
 
 				//var_dump($tokens);
-				self::tokens_to_code($tokens, true); var_dump($filename); exit;
+				//self::tokens_to_code($tokens, true); var_dump($filename); exit;
 			}
+			//break;
 		}
 	}
 }
